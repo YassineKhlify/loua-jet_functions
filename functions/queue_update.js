@@ -1,7 +1,6 @@
 // functions/queue-update.js
 
 const admin = require('firebase-admin');
-const functions = require('@netlify/functions');
 
 const firebaseCredentials = JSON.parse(process.env.FIREBASE_CREDENTIALS);
 
@@ -9,48 +8,34 @@ admin.initializeApp({
   credential: admin.credential.cert(firebaseCredentials),
 });
 
-exports.handler = async (event, context) => {
-  const { stationId, destinationId, driverId } = event.queryStringParameters;
-  
-  const db = admin.firestore();
-  const driverRef = db.collection('queues').doc(stationId).collection(destinationId).doc(driverId);
-  const doc = await driverRef.get();
+exports.notifyDriverOnTurnChange = functions.firestore
+  .document('queues/{stationId}/{destinationId}/{driverId}')
+  .onUpdate(async (change, context) => {
+    // Get the data from before and after the change
+    const before = change.before.data();
+    const after = change.after.data();
 
-  if (!doc.exists) {
-    return {
-      statusCode: 404,
-      body: JSON.stringify({ message: 'Driver not found in the queue.' }),
-    };
-  }
-
-  const driverData = doc.data();
-  
-  // Example of checking a turn field
-  if (driverData.turn) {
-    const message = {
-      notification: {
-        title: 'Queue Update',
-        body: `Your turn has been updated to: ${driverData.turn}`,
-      },
-      token: driverData.fcmToken,
-    };
-
-    try {
-      await admin.messaging().send(message);
-      return {
-        statusCode: 200,
-        body: JSON.stringify({ message: 'Notification sent.' }),
+    // Check if the `turn` field was updated
+    if (after.turn !== before.turn) {
+      const driverId = context.params.driverId;
+      const fcmToken = after.fcmToken; // Make sure you save this token in Firestore
+      
+      const message = {
+        notification: {
+          title: 'Queue Update',
+          body: `Your turn in the queue has been updated to: ${after.turn}`,
+        },
+        token: fcmToken, // The driver's FCM token
       };
-    } catch (error) {
-      return {
-        statusCode: 500,
-        body: JSON.stringify({ error: 'Error sending notification.' }),
-      };
+
+      try {
+        // Send the notification via FCM
+        await admin.messaging().send(message);
+        console.log(`Notification sent to driver ${driverId}`);
+      } catch (error) {
+        console.error('Error sending notification:', error);
+      }
     }
-  }
 
-  return {
-    statusCode: 400,
-    body: JSON.stringify({ message: 'No valid turn data available.' }),
-  };
-};
+    return null;
+  });
